@@ -19,6 +19,8 @@ ARG_CUT = 0.02  # gives 211 arguments, the closest of the cutoffs tried to the p
 N_TEST, N_TEST_NO_CALL = 588, 88
 N_DEV, N_DEV_NO_CALL = 200, 30
 N_SFT, N_GRPO = 3000, 1000
+N_CATALOGUE = 100  # call rows per language, every function in every prompt
+N_ENGLISH_CALL, N_ENGLISH_NO_CALL = 85, 15  # keeps the test set's no-call share
 NO_CALL_RATE, ENGLISH_RATE = 0.15, 0.25
 
 LOCALES = ("en-US", "fr-FR", "es-ES", "zh-CN", "ja-JP", "ar-SA", "hi-IN", "id-ID", "vi-VN", "tr-TR")

@@ -672,3 +672,47 @@ def test_grpo_rows_carry_the_eval_prompt_and_the_whole_item():
     row = grpo_row(gold_item)
     assert row["prompt"] == training_messages(gold_item)
     assert json.loads(row["item"]) == gold_item
+
+
+# ── eval matrix ───────────────────────────────────────────────────────────────
+def test_sample_positions_are_fixed_and_keep_calls_and_no_calls_apart():
+    from data import sample_positions
+    call, no_call = sample_positions(85, 15), sample_positions(85, 15)
+    assert call == no_call and call == sorted(set(call)) and len(call) == 100
+    assert sum(p < 500 for p in call) == 85 and all(p < 588 for p in call)
+
+
+def test_catalogue_items_list_every_function_and_refuse_no_call_rows():
+    from data import catalogue_items
+    rows = [item(ALARM), item([])]
+    out = catalogue_items(rows, TOOLS * 3, [0])
+    assert out[0]["compact"] is True and out[0]["tools"] == TOOLS * 3 and out[0]["gold"] == ALARM
+    with pytest.raises(ValueError):
+        catalogue_items(rows, TOOLS, [1])  # its true function would be back in the list
+
+
+def test_english_items_take_the_aligned_english_gold_and_drop_the_rest():
+    from data import english_items
+    french = {"name": "alarm.set", "arguments": {"time": ["cinq heures"]}}
+    english = [item(ALARM), item(ALARM), item([])]
+    rows = [item([french]), item([{"name": "alarm.set", "arguments": {"date": ["lundi"]}}]), item([])]
+    for row, n in zip(rows + english, "123123"):
+        row["id"] = n
+    out = english_items(rows, english, [0, 1, 2])
+    assert [r["id"] for r in out] == ["1", "3"]
+    assert out[0]["gold"] == ALARM and all(r["policy"] == "english" for r in out)
+    assert out[0]["query"] == rows[0]["query"] and out[1]["gold"] == []
+
+
+def test_summarize_leaves_no_call_rows_out_of_call_metrics(monkeypatch):
+    import score
+    scored = {"a": {"ast_strict": 1, "fsa": 1, "no_call_correct": None, "strict_format": 1, "error": "correct"},
+              "b": {"ast_strict": 0, "fsa": 1, "no_call_correct": None, "strict_format": 0, "error": "invalid_value"},
+              "c": {"ast_strict": None, "fsa": None, "no_call_correct": 1, "strict_format": 1, "error": "correct"}}
+    monkeypatch.setattr(score, "score_item", lambda it, text: scored[it["id"]])
+    out = score.summarize([{"id": k} for k in "abc"],
+                          {k: {"reply": "", "stopped": k != "b"} for k in "abc"})
+    assert out["n"] == 3 and out["n_call"] == 2 and out["n_no_call"] == 1
+    assert out["ast_strict"] == 0.5 and out["fsa"] == 1.0 and out["no_call_correct"] == 1.0
+    assert out["errors"] == {"correct": 2, "invalid_value": 1}
+    assert out["hit_token_cap"] == pytest.approx(1 / 3)

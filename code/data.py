@@ -182,11 +182,45 @@ def held_out_items(rows, schema, test_ids, functions, scenarios, seed):
     return eval_items(test_ids, N_TEST_NO_CALL, convs, functions, scenarios, seed)
 
 
+def sample_positions(n_call, n_no_call, seed=SEED):
+    """Test positions for a subset. Test ids are parallel, so every language gets the same rows."""
+    rng, cut = random.Random(seed), N_TEST - N_TEST_NO_CALL
+    return sorted(rng.sample(range(cut), n_call) + rng.sample(range(cut, N_TEST), n_no_call))
+
+
+def catalogue_items(items, functions, positions):
+    """Every function in compact form. Call rows only: a no-call row's true function would be back in the list."""
+    picked = [items[p] for p in positions]
+    if not all(item["gold"] for item in picked):
+        raise ValueError("catalogue mode can't hold a no-call row")
+    return [{**item, "tools": functions, "compact": True} for item in picked]
+
+
+def english_items(items, en_items, positions):
+    """Rows for the English policy, with gold from the aligned en-US row. Rows that don't align are dropped."""
+    english = {item["id"]: item for item in en_items}
+    out = []
+    for item in (items[p] for p in positions):
+        gold = english[item["id"]]["gold"]
+        if item["gold"]:
+            if align_english(item["gold"][0]["arguments"], gold[0]["arguments"]) is None:
+                continue
+            out.append({**item, "gold": gold, "policy": "english"})
+        else:
+            out.append({**item, "policy": "english"})
+    return out
+
+
 def bfcl_items(samples):
     """AuditKIT's BFCL samples as items. Verbatim policy, the line the model always trains with."""
     return [{"id": s.id, "lang": "en-US", "query": s.input_text, "tools": [t.get("function", t) for t in s.tools],
              "gold": s.expected_tool_calls[0] if s.expected_tool_calls else [], "policy": "verbatim"}
             for s in samples]
+
+
+def read_items(path):
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
 
 
 def write_items(path, items):

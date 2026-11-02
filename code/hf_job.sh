@@ -17,4 +17,4 @@ pip install -q --root-user-action=ignore --extra-index-url https://download.pyto
 
 mkdir -p /tmp/out
 python -m pytest tests -q 2>&1 | tail -3 | tee /tmp/out/tests.txt
-exec python "$1"
+exec python "$@"

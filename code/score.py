@@ -6,6 +6,7 @@ Value levels:
   STRICT    BFCL's checker, the same rule the MASSIVE-Agents paper scores with
   LENIENT   after norm()
 """
+import collections
 import re
 import unicodedata
 
@@ -191,3 +192,21 @@ def score_item(item, text):
         "key_f1": _f1(key_tp, key_fp, key_fn) if same_names else 0.0,
         "value_credit": sum(credits) / len(credits) if credits else float(same_names),
     }
+
+
+METRICS = ("ast_verbatim", "ast_strict", "ast_lenient", "fsa", "format_valid", "strict_format", "no_call_correct")
+
+
+def summarize(items, preds):
+    """Means over the rows each metric applies to, so call metrics skip no-call rows, as the paper's AST does."""
+    rows = [score_item(item, preds[item["id"]]["reply"]) for item in items]
+
+    def mean(key):
+        values = [row[key] for row in rows if row.get(key) is not None]
+        return sum(values) / len(values) if values else None
+
+    n_no_call = sum(row.get("no_call_correct") is not None for row in rows)
+    return {"n": len(rows), "n_call": len(rows) - n_no_call, "n_no_call": n_no_call,
+            **{key: mean(key) for key in METRICS},
+            "errors": dict(sorted(collections.Counter(row["error"] for row in rows).items())),
+            "hit_token_cap": sum(not preds[item["id"]]["stopped"] for item in items) / len(rows)}
