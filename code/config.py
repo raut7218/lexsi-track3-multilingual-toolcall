@@ -10,5 +10,8 @@ AUDITKIT_COMMIT = "71316da345784ff220d5ed59337441a59ab31526"
 
 SEED = 42
 MAX_NEW_TOKENS = 128
+# Set as tokenizer.eos_token everywhere. The shipped eos (id 6) is not what Tiny Aya emits after a
+# response, so TRL never stops and its is_eos mask lets the trailing tokens into the GRPO loss.
+STOP_TOKEN = "<|END_RESPONSE|>"
 
 LOCALES = ("en-US", "fr-FR", "es-ES", "zh-CN", "ja-JP", "ar-SA", "hi-IN", "id-ID", "vi-VN", "tr-TR")
