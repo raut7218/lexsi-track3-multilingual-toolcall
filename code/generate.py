@@ -26,7 +26,7 @@ def pending(items, path):
     return [item for item in items if item["id"] not in done]
 
 
-def load_model(adapter=None, token=None):
+def load_model(adapter=None, token=None, trainable=False):
     """fp16 base, eos set to what Tiny Aya really emits, left padding for batched generation."""
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -34,8 +34,8 @@ def load_model(adapter=None, token=None):
     tk.eos_token = STOP_TOKEN
     model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float16, token=token).to("cuda")
     if adapter:
-        model = PeftModel.from_pretrained(model, adapter)
-    return model.eval(), tk
+        model = PeftModel.from_pretrained(model, adapter, is_trainable=trainable)
+    return (model.train() if trainable else model.eval()), tk
 
 
 def run(model, tk, items, render, path, batch_size=4):

@@ -1,4 +1,7 @@
 """GRPO reward: format, function, keys, values, each gated on the one before it."""
+import json
+from pathlib import Path
+
 from score import score_item
 
 WEIGHTS = {"format": 0.1, "function": 0.3, "keys": 0.3, "values": 0.3}
@@ -21,3 +24,20 @@ def reward_parts(text, item):
 
 def reward(text, item):
     return sum(WEIGHTS[k] * v for k, v in reward_parts(text, item).items())
+
+
+def make_reward(log_path):
+    """GRPO's reward function. It logs every reply and its parts, for the spot checks and the audit."""
+    def tool_call_reward(completions, item, **_):
+        scores = []
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            for completion, row in zip(completions, item):
+                text = completion if isinstance(completion, str) else completion[0]["content"]
+                parsed = json.loads(row)
+                parts = reward_parts(text, parsed)
+                scores.append(sum(WEIGHTS[k] * v for k, v in parts.items()))
+                log.write(json.dumps({"id": parsed["id"], "lang": parsed["lang"], "reply": text, "parts": parts,
+                                      "reward": scores[-1]}, ensure_ascii=False) + "
+")
+        return scores
+    return tool_call_reward
