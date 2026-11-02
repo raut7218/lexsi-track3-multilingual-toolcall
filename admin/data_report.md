@@ -1,6 +1,6 @@
 # Step 1 data report
 
-Built 2026-11-02 on the T4 from commit `74f0bf8`, with 73 of 73 tests passing there. Source numbers are on Drive in `01_data/build_counts.json` and `01_data/report_numbers.json`. Items are in `01_data/items/` (42 files), and `functions.json` has sha256 `12cf91a9…0375f73`.
+Built 2026-11-02 on the T4 from commit `bc9d9e2`, with 77 of 77 tests passing there. Source numbers are on Drive in `01_data/build_counts.json` and `01_data/report_numbers.json`. Items are in `01_data/items/` (46 files), and `functions.json` has sha256 `12cf91a9…0375f73`.
 
 This is a MASSIVE-Agents-style rebuild, not the paper's dataset: its manual filter list and function descriptions aren't published.
 
@@ -15,7 +15,7 @@ This is a MASSIVE-Agents-style rebuild, not the paper's dataset: its manual filt
 | Integrity | 0 schema faults, 0 tool-list faults, 0 partition faults, 0 SFT/GRPO overlap, 0 test/dev overlap |
 | Parallel across languages | Test ids and tool lists identical in all 10 |
 | Gold values in the test query | 100% in every language |
-| Function coverage | Test 55, dev 54, SFT 55, GRPO 42–48 (see decision 3) |
+| Function coverage | Test 55, dev 54, SFT 55, GRPO 55 in every language |
 
 ## Rows removed per filter
 
@@ -50,18 +50,18 @@ The judgment filter is uneven: it removes 14% of ar-SA and none of id-ID. id-ID'
 
 ## English alignment in the 4,000 train rows
 
-| Locale | Aligned with en-US | English-value policy | No-call | Functions in GRPO |
-|---|---|---|---|---|
-| en-US | 4,000 | 999 | 614 | 48 |
-| fr-FR | 3,942 | 1,002 | 603 | 47 |
-| es-ES | 3,918 | 976 | 601 | 48 |
-| zh-CN | 3,993 | 994 | 586 | 48 |
-| ja-JP | 3,978 | 980 | 597 | 48 |
-| ar-SA | 3,983 | 984 | 608 | 42 |
-| hi-IN | 3,985 | 994 | 601 | 48 |
-| id-ID | 3,969 | 960 | 610 | 48 |
-| vi-VN | 3,979 | 984 | 601 | 48 |
-| tr-TR | 3,964 | 978 | 597 | 48 |
+| Locale | Aligned with en-US | English-value policy | No-call |
+|---|---|---|---|
+| en-US | 4,000 | 999 | 614 |
+| fr-FR | 3,942 | 1,002 | 603 |
+| es-ES | 3,918 | 976 | 601 |
+| zh-CN | 3,993 | 994 | 586 |
+| ja-JP | 3,978 | 980 | 597 |
+| ar-SA | 3,983 | 984 | 608 |
+| hi-IN | 3,985 | 994 | 601 |
+| id-ID | 3,969 | 960 | 610 |
+| vi-VN | 3,979 | 984 | 601 |
+| tr-TR | 3,964 | 978 | 597 |
 
 ## Context fit, in real Tiny Aya tokens
 
@@ -73,7 +73,7 @@ The model's limit is 8,192 positions. The chat template adds 366 tokens by itsel
 | Custom one-shot | 1,755 | **9,413 (does not fit)** | 3,157 |
 | Training format | 1,743 | **9,401 (does not fit)** | 3,145 |
 
-- Median at 5 tools is about 1,320 tokens. The longest train prompt found, sampling 1 row in 40, is 2,231 tokens with 8 candidate tools.
+- Median at 5 tools is about 1,320 tokens. The longest train prompt found, sampling 1 row in 40, is 2,230 tokens.
 - The full catalogue can't be used, so catalogue mode uses the compact form, as the plan expected.
 - The longest gold answer is 75 tokens, so `MAX_NEW_TOKENS = 128` cuts none off.
 - Step 0's memory and speed figures came from very short prompts. Real prompts are far longer, so those figures don't carry over. The Step 2 pilot has to re-measure both.
@@ -85,17 +85,36 @@ The model's limit is 8,192 positions. The chat template adds 366 tokens by itsel
 | BFCL en | **Ready** | HF revision `61fc060`, loads in AuditKIT. simple 400, multiple 200, parallel 200, parallel_multiple 200, irrelevance 240 |
 | MLCL zh/hi, Igbo | **Not obtainable so far** | The paper's only link is an anonymised review host. Its API returns `410 repository_expired` from Colab. No copy found on HF or GitHub, or on the ACL or Papers with Code pages. One aggregator page (awesomepapers.io) returned 429, so it is unchecked |
 | Multilingual-BFCL vi | **Pending** | Still awaiting the authors' approval on 2026-11-02 |
+| MASSIVE held-out languages | **Ready** | Swahili, Amharic, Telugu, Khmer. See below |
 
-As things stand, the only OOD set in hand is English. MLCL's paper also used `BFCL_v4_multiple`, while the BFCL files here are v3.
+The only new-schema OOD set in hand is English. MLCL's paper also used `BFCL_v4_multiple`, while the BFCL files here are v3.
+
+## Held-out languages
+
+These use the 10-language test ids, tool lists and no-call assignment, and the same filters. A row that fails a filter in a held-out language is left out, so those sets are smaller, and comparisons with the 10 languages should use the shared ids.
+
+| Locale | Items of 588 | No-call | Functions | Judgment removed | Worst prompt tokens |
+|---|---|---|---|---|---|
+| sw-KE | 570 | 86 | 55 | 257 | 1,753 |
+| am-ET | 582 | 86 | 55 | 283 | 1,771 |
+| te-IN | 581 | 87 | 55 | 255 | 1,761 |
+| km-KH | 429 | 68 | 55 | 4,263 | 1,708 |
+
+- Ids, order, tools and no-call flags match the main test set, and 100% of gold values appear in the query.
+- km-KH loses 26% of its rows to the judgment filter, mostly on grammar (4,282 rows fail it), so it has 27% fewer items than the full set.
+- All four languages are on Tiny Aya's own language list. They are new to our SFT and GRPO, not to the base model. The right claim is "languages outside our training", not "languages the model has never seen".
+- They reuse the same 55 schemas, so they say nothing about new tools. BFCL en covers that, in English only.
 
 ## Known limits
 
 - `iot.hue_lighton` and `music.dislikeness` have only 1 and 2 rows in the shared test pool, so per-function results for them mean nothing. Four other functions have 8 or fewer rows.
 - `functions.json` is on Drive, not in git. It rebuilds exactly from `data.build_all`.
 
-## Decisions needed at this gate
+## Decisions made at this gate
 
-1. **Judgment filter.** Keep the thresholds above? They cost ar-SA 14% and id-ID nothing. Recommended: keep. Test size is met comfortably, and the bias is reported rather than hidden.
-2. **Rare-argument cutoff of 2%.** Gives 211 arguments against the paper's 200. Recommended: keep.
-3. **SFT/GRPO split.** SFT takes the first 3,000 sampled rows, so rare functions run out before GRPO starts and GRPO sees only 42–48 functions. Shuffling before the split gives 55 in every language. Recommended: shuffle. This changes the built items, so it needs a rebuild of about 20 seconds.
-4. **Multilingual OOD.** Plan decision 8 rules out machine translation, and rebuilding MLCL needs approval. Recommended: add a held-out-language test from MASSIVE's 42 unused locales, such as sw-KE, am-ET, te-IN and km-KH. Those rows are human-collected and parallel to the test ids. This tests unseen languages with the same schemas, so it does not replace new-schema OOD. Separately, the user could email the MLCL authors for the data.
+The user accepted all four recommendations on 2026-11-02.
+
+1. Judgment filter kept as above. Its uneven effect is reported.
+2. Rare-argument cutoff kept at 2%.
+3. Train rows are shuffled before the SFT/GRPO split, which raised GRPO from 42–48 functions to 55.
+4. MASSIVE held-out languages added as the multilingual OOD test. MLCL is not rebuilt. Contacting its authors is left with the user.
