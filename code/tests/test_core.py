@@ -3,15 +3,16 @@ import random
 
 import pytest
 
-from config import N_GRPO, N_SFT
+from config import N_GRPO, N_SFT, STOP_TOKEN
 from data import (align_english, arg_schema, bfcl_items, build_item, candidates, convert, eval_items, fn_name,
                   functions_json, held_out_items, judged, load_massive, slots, split_train, stratified,
                   why_dropped)
 from generate import pending, read_preds
 from parse import parse
-from prompts import FORMAT, bfcl_zero_shot, custom_one_shot, grpo_prompt, training_messages
+from prompts import FORMAT, bfcl_zero_shot, custom_one_shot, grpo_prompt, target, training_messages
 from rewards import reward, reward_parts
 from score import norm, score_item
+from train_sft import encode
 
 TOOLS = [
     {"name": "alarm.set", "description": "Set an alarm", "parameters": {
@@ -604,3 +605,41 @@ def test_nested_dicts_match_their_accepted_values_not_the_literal_gold():
     gold = [{"name": "f", "arguments": {"c": [{"dept": ["Science"], "school": ["BHS", ""]}]}}]
     assert score_item(item(gold, tools=tools), f_reply({"c": {"dept": "Science"}}))["ast_strict"] == 1
     assert score_item(item(gold, tools=tools), f_reply({"c": {"dept": ["Science"], "school": ["BHS", ""]}}))["ast_strict"] == 0
+
+
+# ── SFT ───────────────────────────────────────────────────────────────────────
+class CharTokenizer:
+    """One token per character, enough to check what encode() masks."""
+
+    def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+        assert tokenize is False and add_generation_prompt is True
+        return "".join(m["content"] for m in messages) + "|"
+
+    def __call__(self, text, add_special_tokens):
+        assert add_special_tokens is False
+        return {"input_ids": [ord(c) for c in text]}
+
+
+def test_target_is_exactly_the_format_the_prompt_asks_for():
+    assert target(item(ALARM)) == '[{"tool_name": "alarm.set", "parameters": {"time": "five am"}}]'
+    assert target(item([])) == "[]"
+
+
+def test_target_keeps_non_latin_values_readable():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["सुबह"]}}]
+    assert "सुबह" in target(item(gold))
+
+
+def test_encode_masks_the_prompt_and_ends_at_the_stop_token():
+    gold_item = {**item(ALARM), "policy": "verbatim"}
+    row = encode(gold_item, CharTokenizer())
+    reply = [ord(c) for c in target(gold_item) + STOP_TOKEN]
+    n_prompt = len("".join(m["content"] for m in training_messages(gold_item))) + 1
+    assert row["input_ids"][n_prompt:] == reply
+    assert row["labels"] == [-100] * n_prompt + reply
+
+
+def test_target_scores_perfectly_and_earns_full_reward():
+    gold_item = {**item(ALARM), "policy": "verbatim"}
+    assert score_item(gold_item, target(gold_item))["ast_verbatim"] == 1
+    assert reward(target(gold_item), gold_item) == pytest.approx(1.0)

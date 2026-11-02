@@ -78,6 +78,13 @@ def training_messages(item):
     return [{"role": "system", "content": f"{system['content']}\n\n{FORMAT.format(tools='')}"}, user]
 
 
+def target(item):
+    """The reply SFT teaches: what FORMAT asks for, using each argument's first accepted value."""
+    calls = [{"tool_name": g["name"], "parameters": {k: v[0] for k, v in g["arguments"].items()}}
+             for g in item["gold"]]
+    return json.dumps(calls, ensure_ascii=False)
+
+
 def bfcl_zero_shot(item):
     text = BFCL_ZERO_SHOT.format(functions=tools_block(item), question=item["query"])
     return [{"role": "user", "content": text}]
