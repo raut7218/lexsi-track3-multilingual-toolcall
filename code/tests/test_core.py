@@ -561,3 +561,46 @@ def test_bfcl_items_unwraps_tools_and_takes_the_single_turn():
     assert (first["id"], first["lang"], first["query"], first["tools"], first["gold"]) == ("simple_0", "en-US", "q", [tool], [call])
     assert first["policy"] == "verbatim"
     assert second["gold"] == []
+
+
+# ── BFCL checker parity, from the gorilla cross-check ─────────────────────────
+def one_tool(props, required=()):
+    return [{"name": "f", "description": "", "parameters": {"type": "object", "properties": props, "required": list(required)}}]
+
+
+def f_reply(*calls):
+    return json.dumps([{"tool_name": "f", "parameters": args} for args in calls])
+
+
+FLOATS = one_tool({"xs": {"type": "array", "items": {"type": "number"}}})
+
+
+def test_ints_in_a_float_array_fail_as_in_bfcl():
+    gold = [{"name": "f", "arguments": {"xs": [[1.0, 3.0]]}}]
+    assert score_item(item(gold, tools=FLOATS), f_reply({"xs": [1, 3]}))["ast_strict"] == 0
+    assert score_item(item(gold, tools=FLOATS), f_reply({"xs": [1.0, 3.0]}))["ast_strict"] == 1
+
+
+def test_ints_in_a_float_array_pass_when_gold_lists_ints():
+    gold = [{"name": "f", "arguments": {"xs": [[1, 3]]}}]
+    assert score_item(item(gold, tools=FLOATS), f_reply({"xs": [1, 3]}))["ast_strict"] == 1
+
+
+def test_an_argument_the_schema_requires_cannot_be_dropped_even_if_gold_marks_it_optional():
+    tools = one_tool({"a": {"type": "integer"}, "b": {"type": "integer"}}, required=["a", "b"])
+    gold = [{"name": "f", "arguments": {"a": [1], "b": [2, ""]}}]
+    assert score_item(item(gold, tools=tools), f_reply({"a": 1}))["ast_strict"] == 0
+    assert score_item(item(gold, tools=tools), f_reply({"a": 1, "b": 2}))["ast_strict"] == 1
+
+
+def test_each_gold_call_takes_the_first_call_that_fully_passes():
+    tools = one_tool({"a": {"type": "integer"}, "b": {"type": "integer"}})
+    gold = [{"name": "f", "arguments": {"a": [1], "b": ["", 2]}}, {"name": "f", "arguments": {"a": [1], "b": [2]}}]
+    assert score_item(item(gold, tools=tools), f_reply({"a": 1}, {"a": 1, "b": 2}))["ast_strict"] == 1
+
+
+def test_nested_dicts_match_their_accepted_values_not_the_literal_gold():
+    tools = one_tool({"c": {"type": "object"}})
+    gold = [{"name": "f", "arguments": {"c": [{"dept": ["Science"], "school": ["BHS", ""]}]}}]
+    assert score_item(item(gold, tools=tools), f_reply({"c": {"dept": "Science"}}))["ast_strict"] == 1
+    assert score_item(item(gold, tools=tools), f_reply({"c": {"dept": ["Science"], "school": ["BHS", ""]}}))["ast_strict"] == 0
