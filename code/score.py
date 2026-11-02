@@ -28,22 +28,37 @@ def norm(value):
     return " ".join(_NUMBER_WORDS.get(w, w) for w in s.split())
 
 
+def _items_typed(pred, alts, spec):
+    """BFCL checks array items by exact type, unless gold's own list uses the predicted type."""
+    want = {"integer": int, "number": float}.get((spec.get("items") or {}).get("type"))
+    if want is None or not isinstance(pred, list):
+        return True
+    return any(all(type(x) is want or (a and type(x) is type(a[0])) for x in pred)
+               for a in alts if isinstance(a, list))
+
+
 def value_level(pred, alts, spec=None):
-    if any(type(pred) is type(a) and pred == a for a in alts):
+    spec = spec or {}
+    # Not for lists and dicts: a nested gold holds accepted-value lists, and Python calls [1] and [1.0] equal.
+    if any(type(pred) is type(a) and pred == a for a in alts if not isinstance(a, (list, dict))):
         return VERBATIM
-    float_for_int = (spec or {}).get("type") == "integer" and isinstance(pred, float)
-    if not float_for_int and any(_value_eq(pred, a) for a in alts):
+    float_for_int = spec.get("type") == "integer" and isinstance(pred, float)
+    if not float_for_int and _items_typed(pred, alts, spec) and any(_value_eq(pred, a) for a in alts):
         return STRICT
     n = norm(pred)
     return LENIENT if n and any(n == norm(a) for a in alts) else WRONG
 
 
-def _properties(item, name):
+def _parameters(item, name):
     for tool in item["tools"]:
         fn = tool.get("function", tool)
         if fn["name"] == name:
-            return (fn.get("parameters") or {}).get("properties") or {}
+            return fn.get("parameters") or {}
     return {}
+
+
+def _properties(item, name):
+    return _parameters(item, name).get("properties") or {}
 
 
 def _lang_mismatch(item, pred, level):
@@ -59,8 +74,10 @@ def _lang_mismatch(item, pred, level):
     return any(ord(c) > 127 and c.isalpha() for c in pred)
 
 
-def _required(gold_call):
-    return {k for k, alts in gold_call["arguments"].items() if "" not in alts}
+def _required(item, gold_call):
+    """Gold's non-optional arguments plus the schema's: BFCL enforces both."""
+    schema = _parameters(item, gold_call["name"]).get("required") or []
+    return {k for k, alts in gold_call["arguments"].items() if "" not in alts} | set(schema)
 
 
 def _bucket(gold):
@@ -85,18 +102,20 @@ def _no_call_result(item, parsed):
 
 
 def _pair(item, gold, calls):
-    """Order doesn't matter, as in BFCL's no-order check: each gold call takes its best same-named call."""
+    """Each gold call takes the first unused call that fully passes, as BFCL's no-order check does.
+    With no full pass it takes the closest, so the key and value metrics still mean something.
+    """
     rest, pairs = list(calls), []
     for g in gold:
-        props = _properties(item, g["name"])
+        props, ref, need = _properties(item, g["name"]), g["arguments"], _required(item, g)
 
-        def matches(call):
+        def rank(call):
             args = call["arguments"]
-            right = sum(k in args and value_level(args[k], alts, props.get(k)) >= STRICT
-                        for k, alts in g["arguments"].items())
-            return right - len(set(args) - set(g["arguments"]))
+            right = sum(value_level(args[k], ref[k], props.get(k)) >= STRICT for k in set(args) & set(ref))
+            full = need <= set(args) <= set(ref) and right == len(args)
+            return (1, 0) if full else (0, right - len(set(args) - set(ref)))
 
-        best = max((c for c in rest if c["name"] == g["name"]), key=matches)
+        best = max((c for c in rest if c["name"] == g["name"]), key=rank)
         rest.remove(best)
         pairs.append((g, best))
     return pairs
@@ -117,7 +136,7 @@ def score_item(item, text):
         for g, c in _pair(item, gold, calls):
             props = _properties(item, g["name"])
             pred, ref = c["arguments"], g["arguments"]
-            need = _required(g)
+            need = _required(item, g)
             common = set(pred) & set(ref)
             extra_keys, missing_keys = set(pred) - set(ref), need - set(pred)
             extra += len(extra_keys)
@@ -135,7 +154,7 @@ def score_item(item, text):
             val_fn += len(missing_keys) + len(wrong & need)
             mismatch += any(_lang_mismatch(item, pred[k], arg_levels[k]) for k in wrong)
     else:
-        n_required = sum(len(_required(g)) for g in gold)
+        n_required = sum(len(_required(item, g)) for g in gold)
         n_pred = sum(len(c["arguments"]) for c in calls)
         key_fn, key_fp, val_fn, val_fp = n_required, n_pred, n_required, n_pred
 
