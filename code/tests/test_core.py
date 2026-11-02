@@ -4,7 +4,7 @@ import random
 import pytest
 
 from config import N_GRPO, N_SFT
-from data import (align_english, arg_schema, build_item, candidates, convert, eval_items, fn_name,
+from data import (align_english, arg_schema, bfcl_items, build_item, candidates, convert, eval_items, fn_name,
                   functions_json, held_out_items, judged, load_massive, slots, split_train, stratified,
                   why_dropped)
 from generate import pending, read_preds
@@ -551,7 +551,6 @@ def test_same_named_calls_with_crossed_values_stay_wrong():
 # ── BFCL items ────────────────────────────────────────────────────────────────
 def test_bfcl_items_unwraps_tools_and_takes_the_single_turn():
     from types import SimpleNamespace
-    from data import bfcl_items
     tool = {"name": "add", "description": "", "parameters": {}}
     call = {"name": "add", "arguments": {"a": [1]}}
     samples = [SimpleNamespace(id="simple_0", input_text="q", tools=[{"type": "function", "function": tool}],

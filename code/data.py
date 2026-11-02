@@ -182,6 +182,13 @@ def held_out_items(rows, schema, test_ids, functions, scenarios, seed):
     return eval_items(test_ids, N_TEST_NO_CALL, convs, functions, scenarios, seed)
 
 
+def bfcl_items(samples):
+    """AuditKIT's BFCL samples as items. Verbatim policy, the line the model always trains with."""
+    return [{"id": s.id, "lang": "en-US", "query": s.input_text, "tools": [t.get("function", t) for t in s.tools],
+             "gold": s.expected_tool_calls[0] if s.expected_tool_calls else [], "policy": "verbatim"}
+            for s in samples]
+
+
 def write_items(path, items):
     with gzip.open(path, "wt", encoding="utf-8") as f:
         for item in items:

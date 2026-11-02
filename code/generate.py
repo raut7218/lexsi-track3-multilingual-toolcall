@@ -38,7 +38,7 @@ def load_model(adapter=None, token=None):
     return model.eval(), tk
 
 
-def run(model, tk, items, render, path, batch_size=16):
+def run(model, tk, items, render, path, batch_size=4):
     """render(item) gives the messages. Returns timing; rows go to path as they finish."""
     todo = pending(items, path)
     texts = [tk.apply_chat_template(render(i), tokenize=False, add_generation_prompt=True) for i in todo]

@@ -84,6 +84,24 @@ def _no_call_result(item, parsed):
     }
 
 
+def _pair(item, gold, calls):
+    """Order doesn't matter, as in BFCL's no-order check: each gold call takes its best same-named call."""
+    rest, pairs = list(calls), []
+    for g in gold:
+        props = _properties(item, g["name"])
+
+        def matches(call):
+            args = call["arguments"]
+            right = sum(k in args and value_level(args[k], alts, props.get(k)) >= STRICT
+                        for k, alts in g["arguments"].items())
+            return right - len(set(args) - set(g["arguments"]))
+
+        best = max((c for c in rest if c["name"] == g["name"]), key=matches)
+        rest.remove(best)
+        pairs.append((g, best))
+    return pairs
+
+
 def score_item(item, text):
     gold, parsed = item["gold"], parse(text)
     if not gold:
@@ -96,8 +114,7 @@ def score_item(item, text):
     key_tp = key_fp = key_fn = val_tp = val_fp = val_fn = 0
     levels, credits, extra, missing, mismatch = [], [], 0, 0, 0
     if same_names:
-        # ponytail: pairs calls by name; repeated names would need BFCL's parallel matching.
-        for g, c in zip(sorted(gold, key=by_name), sorted(calls, key=by_name)):
+        for g, c in _pair(item, gold, calls):
             props = _properties(item, g["name"])
             pred, ref = c["arguments"], g["arguments"]
             need = _required(g)
