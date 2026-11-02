@@ -1,0 +1,383 @@
+import json
+import random
+
+import pytest
+
+from data import align_english, build_item, candidates, convert, fn_name, slots
+from parse import parse
+from prompts import FORMAT, bfcl_zero_shot, custom_one_shot, grpo_prompt, training_messages
+from rewards import reward, reward_parts
+from score import norm, score_item
+
+TOOLS = [
+    {"name": "alarm.set", "description": "Set an alarm", "parameters": {
+        "type": "object",
+        "properties": {"time": {"type": "string"}, "count": {"type": "integer"}},
+        "required": ["time"]}},
+    {"name": "email.query", "description": "Read emails",
+     "parameters": {"type": "object", "properties": {}, "required": []}},
+]
+
+
+def item(gold, tools=TOOLS, query="wake me at five"):
+    return {"id": "1", "lang": "en-US", "query": query, "tools": tools, "gold": gold}
+
+
+ALARM = [{"name": "alarm.set", "arguments": {"time": ["five am"]}}]
+
+
+# ── parse ─────────────────────────────────────────────────────────────────────
+def test_strict_json_list():
+    p = parse('[{"tool_name": "alarm.set", "parameters": {"time": "five am"}}]')
+    assert p == {"calls": [{"name": "alarm.set", "arguments": {"time": "five am"}}],
+                 "parsed": True, "strict": True}
+
+
+def test_empty_list_is_a_valid_no_call():
+    assert parse("[]") == {"calls": [], "parsed": True, "strict": True}
+
+
+def test_plain_text_is_not_parsed():
+    assert parse("Sorry, I can't do that.") == {"calls": [], "parsed": False, "strict": False}
+
+
+def test_malformed_json_is_not_parsed():
+    assert parse('[{"tool_name": "alarm.set", "parameters": {"time": ')["parsed"] is False
+
+
+def test_extra_keys_in_a_call_are_not_strict():
+    p = parse('[{"tool_name": "a.b", "parameters": {}, "note": "x"}]')
+    assert p["strict"] is False
+
+
+def test_prose_around_json_parses_but_is_not_strict():
+    p = parse('Sure! [{"tool_name": "a.b", "parameters": {"x": 1}}]')
+    assert p["calls"] == [{"name": "a.b", "arguments": {"x": 1}}]
+    assert (p["parsed"], p["strict"]) == (True, False)
+
+
+def test_pythonic_bfcl_list_with_dotted_name():
+    p = parse('[alarm.set(time="nine am", count=2), email.query()]')
+    assert p["calls"] == [{"name": "alarm.set", "arguments": {"time": "nine am", "count": 2}},
+                          {"name": "email.query", "arguments": {}}]
+    assert p["strict"] is True
+
+
+def test_pythonic_action_prefix():
+    assert parse('Action: alarm.set(time="nine am")')["calls"][0]["name"] == "alarm.set"
+
+
+def test_pythonic_non_literal_argument_is_rejected():
+    assert parse("[alarm.set(time=now())]")["parsed"] is False
+
+
+def test_pythonic_positional_argument_is_rejected():
+    assert parse('[alarm.set("nine am")]')["parsed"] is False
+
+
+# ── score ─────────────────────────────────────────────────────────────────────
+def score(gold, text, **kw):
+    return score_item(item(gold, **kw), text)
+
+
+def call(**args):
+    return json.dumps([{"tool_name": "alarm.set", "parameters": args}], ensure_ascii=False)
+
+
+def test_exact_match_passes_every_level():
+    s = score(ALARM, call(time="five am"))
+    assert (s["fsa"], s["ast_verbatim"], s["ast_strict"], s["ast_lenient"]) == (1, 1, 1, 1)
+    assert s["error"] == "correct"
+
+
+def test_case_difference_is_strict_but_not_verbatim():
+    s = score(ALARM, call(time="Five AM"))
+    assert (s["ast_verbatim"], s["ast_strict"]) == (0, 1)
+
+
+def test_lenient_catches_what_strict_misses():
+    s = score([{"name": "alarm.set", "arguments": {"time": ["5 a.m."]}}], call(time="5:00 AM"))
+    assert (s["ast_strict"], s["ast_lenient"]) == (0, 1)
+
+
+def test_wrong_value_fails_all_levels_but_keeps_fsa():
+    s = score(ALARM, call(time="six am"))
+    assert (s["fsa"], s["ast_strict"], s["ast_lenient"], s["error"]) == (1, 0, 0, "invalid_value")
+
+
+def test_accepted_value_lists():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["five am", "5 am"]}}]
+    assert score(gold, call(time="5 am"))["ast_strict"] == 1
+
+
+def test_optional_arg_may_be_omitted():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["five am"], "count": [2, ""]}}]
+    assert score(gold, call(time="five am"))["ast_strict"] == 1
+
+
+def test_missing_required_arg():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["five am"], "count": [2]}}]
+    s = score(gold, call(time="five am"))
+    assert (s["ast_strict"], s["error"]) == (0, "missing_param")
+
+
+def test_hallucinated_key_fails():
+    s = score(ALARM, call(time="five am", place="home"))
+    assert (s["ast_strict"], s["error"]) == (0, "unexpected_param")
+
+
+def test_float_for_integer_schema_fails_strict():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["five am"], "count": [2]}}]
+    assert score(gold, call(time="five am", count=2.0))["ast_strict"] == 0
+
+
+def test_int_for_number_schema_passes():
+    tools = [{"name": "alarm.set", "parameters": {
+        "type": "object", "properties": {"v": {"type": "number"}}, "required": ["v"]}}]
+    gold = [{"name": "alarm.set", "arguments": {"v": [2.0]}}]
+    assert score(gold, call(v=2), tools=tools)["ast_strict"] == 1
+
+
+def test_wrong_function():
+    s = score(ALARM, '[{"tool_name": "email.query", "parameters": {}}]')
+    assert (s["fsa"], s["ast_strict"], s["error"]) == (0, 0, "wrong_function")
+
+
+def test_wrong_number_of_calls():
+    text = json.dumps([{"tool_name": "alarm.set", "parameters": {"time": "five am"}}] * 2)
+    s = score(ALARM, text)
+    assert (s["fsa"], s["ast_strict"], s["error"]) == (0, 0, "wrong_count")
+
+
+def test_unparsed_output_on_a_call_item_is_a_syntax_error():
+    s = score(ALARM, "I set your alarm.")
+    assert (s["format_valid"], s["error"]) == (0, "invalid_syntax")
+
+
+def test_no_call_correct_for_empty_list_and_plain_text():
+    assert score([], "[]")["no_call_correct"] == 1
+    assert score([], "No tool fits.")["no_call_correct"] == 1
+
+
+def test_no_call_item_with_a_call_is_over_calling():
+    s = score([], call(time="five am"))
+    assert (s["no_call_correct"], s["error"]) == (0, "over_call")
+
+
+def test_call_metrics_are_absent_on_no_call_items():
+    s = score([], "[]")
+    assert s["fsa"] is None and s["ast_strict"] is None and s["no_arg_bucket"] is None
+
+
+def test_argument_level_counts():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["five am"], "count": [2]}}]
+    s = score(gold, call(time="six am", place="home"))
+    assert (s["key_tp"], s["key_fp"], s["key_fn"]) == (1, 1, 1)
+    assert (s["val_tp"], s["val_fp"], s["val_fn"]) == (0, 2, 2)
+
+
+def test_difficulty_bucket():
+    assert score(ALARM, "[]")["no_arg_bucket"] == "1"
+    two = [{"name": "alarm.set", "arguments": {"time": ["a"], "count": [1]}}]
+    assert score(two, "[]")["no_arg_bucket"] == "2+"
+    zero = [{"name": "email.query", "arguments": {}}]
+    assert score(zero, "[]")["no_arg_bucket"] == "0"
+
+
+def test_language_mismatch_flags_non_english_value():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["today"]}}]
+    assert score(gold, call(time="आज"))["lang_mismatch"] == 1
+    assert score(gold, call(time="tomorrow"))["lang_mismatch"] == 0
+
+
+def test_language_mismatch_ignores_a_correct_value():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["आज"]}}]
+    assert score(gold, call(time="आज"))["lang_mismatch"] == 0
+
+
+def test_language_mismatch_in_latin_script_igbo_uses_copying_from_the_query():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["today"]}}]
+    it = {**item(gold, query="tinye mkpu n'ututu"), "lang": "ig"}
+    assert score_item(it, call(time="ututu"))["lang_mismatch"] == 1
+    assert score_item(it, call(time="tomorrow"))["lang_mismatch"] == 0
+
+
+def test_norm_converts_digits_from_other_scripts():
+    assert norm("٥ صباحا") == norm("5 صباحا")
+    assert norm("५") == "5"
+
+
+def test_norm_keeps_hindi_combining_marks():
+    assert norm("मुंबई") != norm("मबई")
+
+
+def test_norm_maps_english_number_words():
+    assert norm("Five") == "5"
+
+
+# ── rewards ───────────────────────────────────────────────────────────────────
+def parts(gold, text):
+    return reward_parts(text, item(gold))
+
+
+def test_perfect_call_earns_full_reward():
+    assert reward(call(time="five am"), item(ALARM)) == pytest.approx(1.0)
+
+
+def test_normalised_only_value_earns_half_value_credit():
+    gold = [{"name": "alarm.set", "arguments": {"time": ["5 a.m."]}}]
+    assert parts(gold, call(time="5:00 AM"))["values"] == 0.5
+
+
+def test_value_reward_is_gated_on_function():
+    p = parts(ALARM, '[{"tool_name": "email.query", "parameters": {"time": "five am"}}]')
+    assert (p["function"], p["keys"], p["values"]) == (0, 0, 0)
+
+
+def test_value_reward_is_gated_on_exact_keys():
+    p = parts(ALARM, call(time="five am", place="home"))
+    assert p["keys"] < 1 and p["values"] == 0
+
+
+def test_empty_list_on_a_call_item_earns_nothing():
+    assert reward("[]", item(ALARM)) == 0
+
+
+def test_prose_wrapped_call_earns_nothing():
+    assert reward("Sure! " + call(time="five am"), item(ALARM)) == 0
+
+
+def test_correct_no_call_earns_full_reward():
+    assert reward("[]", item([])) == pytest.approx(1.0)
+
+
+def test_plain_text_no_call_loses_only_the_format_part():
+    assert reward("No tool fits.", item([])) == pytest.approx(0.9)
+
+
+def test_over_calling_earns_at_most_the_format_part():
+    assert reward(call(time="five am"), item([])) == pytest.approx(0.1)
+
+
+def test_no_arg_call_earns_full_reward():
+    gold = [{"name": "email.query", "arguments": {}}]
+    assert reward('[{"tool_name": "email.query", "parameters": {}}]', item(gold)) == pytest.approx(1.0)
+
+
+# ── prompts ───────────────────────────────────────────────────────────────────
+def test_grpo_prompt_composes_into_the_training_prompt():
+    # agentic rollout: system = f"{system}\n\n{tools_fallback_prompt.format(tools=...)}"
+    it = {**item(ALARM), "policy": "verbatim"}
+    system, user = grpo_prompt(it)
+    composed = f"{system['content']}\n\n{FORMAT.format(tools='ignored')}"
+    assert [{"role": "system", "content": composed}, user] == training_messages(it)
+
+
+def test_training_prompt_offers_only_the_item_tools():
+    it = {**item(ALARM, tools=TOOLS[:1]), "policy": "verbatim"}
+    system = training_messages(it)[0]["content"]
+    assert "alarm.set" in system and "email.query" not in system
+
+
+def test_policy_line_changes_only_the_policy():
+    base = {**item(ALARM), "policy": None}
+    assert "verbatim" not in training_messages(base)[0]["content"].lower()
+    assert "exactly as written" in training_messages({**base, "policy": "verbatim"})[0]["content"]
+    assert "in English" in training_messages({**base, "policy": "english"})[0]["content"]
+
+
+def test_bfcl_prompt_keeps_the_paper_wording():
+    text = bfcl_zero_shot(item(ALARM))[0]["content"]
+    assert text.startswith("You are an expert in composing functions.")
+    assert "User: wake me at five Bot:" in text
+
+
+def test_one_shot_prompt_keeps_the_paper_example():
+    text = custom_one_shot(item(ALARM))[0]["content"]
+    assert 'Bot: Action: alarm.set(time="nine am", date="this week")' in text
+    assert text.endswith("User: wake me at five Bot:")
+
+
+def test_compact_catalogue_lists_one_tool_per_line_without_types():
+    it = {**item(ALARM), "policy": "verbatim", "compact": True}
+    system = training_messages(it)[0]["content"]
+    assert '{"name": "alarm.set", "description": "Set an alarm", "args": ["time", "count"]}' in system
+    assert '"type"' not in system
+
+
+# ── data ──────────────────────────────────────────────────────────────────────
+def row(**kw):
+    return {"id": "7", "locale": "hi-IN", "scenario": "weather", "intent": "weather_query",
+            "utt": "x", "annot_utt": "x", **kw}
+
+
+def test_fn_name_replaces_only_the_first_underscore():
+    assert fn_name("alarm_set") == "alarm.set"
+    assert fn_name("audio_volume_up") == "audio.volume_up"
+
+
+def test_slots_parse_unicode_and_inner_colon():
+    assert slots("मौसम [place_name : मुंबई] [date : आज]") == [("place_name", "मुंबई"), ("date", "आज")]
+    assert slots("at [time : 5:30 am]") == [("time", "5:30 am")]
+
+
+def test_convert_maps_slots_to_arguments():
+    c = convert(row(annot_utt="[place_name : मुंबई] मौसम"))
+    assert (c["name"], c["args"]) == ("weather.query", {"place_name": "मुंबई"})
+
+
+def test_convert_drops_catch_all_intents():
+    assert convert(row(intent="general_quirky")) is None
+
+
+def test_convert_drops_duplicate_slots():
+    assert convert(row(annot_utt="[food_type : a] and [food_type : b]")) is None
+
+
+def test_convert_uses_the_whole_utterance_for_qa():
+    c = convert(row(intent="qa_factoid", utt="how large is alaska",
+                    annot_utt="how large is [place_name : alaska]"))
+    assert (c["name"], c["args"]) == ("qa.factoid", {"query": "how large is alaska"})
+
+
+def test_align_english_needs_the_same_keys():
+    assert align_english({"date": "आज"}, {"date": "today"}) == {"date": "today"}
+    assert align_english({"date": "आज"}, {"time": "today"}) is None
+
+
+NAMES = {"a.1": "a", "a.2": "a", "a.3": "a", "a.4": "a", "b.1": "b", "b.2": "b", "c.1": "c"}
+
+
+def test_eval_candidates_are_correct_plus_three_same_scenario_plus_one_random():
+    picks = candidates("a.1", NAMES, 5, random.Random("x"))
+    assert len(picks) == 5 and "a.1" in picks
+    assert sum(NAMES[p] == "a" for p in picks) == 4
+
+
+def test_candidates_fill_from_other_scenarios_when_the_scenario_is_small():
+    picks = candidates("c.1", NAMES, 5, random.Random("x"))
+    assert len(set(picks)) == 5 and "c.1" in picks
+
+
+def test_build_item_uses_identical_candidates_across_languages():
+    fns = {n: {"name": n, "description": n, "parameters": {}} for n in NAMES}
+    en = build_item({"id": "9", "lang": "en-US", "query": "q", "name": "a.1", "args": {}},
+                    fns, NAMES, k=5, no_call=False, policy="verbatim", seed=1)
+    hi = build_item({"id": "9", "lang": "hi-IN", "query": "क", "name": "a.1", "args": {}},
+                    fns, NAMES, k=5, no_call=False, policy="verbatim", seed=1)
+    assert [t["name"] for t in en["tools"]] == [t["name"] for t in hi["tools"]]
+
+
+def test_no_call_item_removes_the_correct_tool_and_keeps_the_list_size():
+    fns = {n: {"name": n, "description": n, "parameters": {}} for n in NAMES}
+    it = build_item({"id": "9", "lang": "en-US", "query": "q", "name": "a.1", "args": {"x": "y"}},
+                    fns, NAMES, k=5, no_call=True, policy="verbatim", seed=1)
+    assert it["gold"] == [] and len(it["tools"]) == 5
+    assert "a.1" not in [t["name"] for t in it["tools"]]
+
+
+def test_build_item_wraps_gold_values_as_accepted_lists():
+    fns = {n: {"name": n, "description": n, "parameters": {}} for n in NAMES}
+    it = build_item({"id": "9", "lang": "en-US", "query": "q", "name": "a.1", "args": {"x": "y"}},
+                    fns, NAMES, k=2, no_call=False, policy="verbatim", seed=1)
+    assert it["gold"] == [{"name": "a.1", "arguments": {"x": ["y"]}}]
