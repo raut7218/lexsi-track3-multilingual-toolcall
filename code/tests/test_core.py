@@ -525,3 +525,40 @@ def test_read_preds_returns_each_finished_row_by_id(tmp_path):
     log = tmp_path / "preds.jsonl"
     log.write_text('{"id": "1", "reply": "a"}\n{"id": "2", "rep\n{"id": "3", "reply": "c"}\n', encoding="utf-8")
     assert {k: v["reply"] for k, v in read_preds(log).items()} == {"1": "a", "3": "c"}
+
+
+# ── repeated function names, as in BFCL's parallel items ──────────────────────
+SPOTIFY = [{"name": "spotify.play", "description": "", "parameters": {"type": "object", "properties": {
+    "artist": {"type": "string"}, "duration": {"type": "integer"}}, "required": ["artist", "duration"]}}]
+TWO_CALLS = [{"name": "spotify.play", "arguments": {"artist": ["Taylor Swift"], "duration": [20]}},
+             {"name": "spotify.play", "arguments": {"artist": ["Maroon 5"], "duration": [15]}}]
+
+
+def spotify_reply(*pairs):
+    return json.dumps([{"tool_name": "spotify.play", "parameters": {"artist": a, "duration": d}} for a, d in pairs])
+
+
+def test_same_named_calls_score_correct_in_either_order():
+    gold_item = item(TWO_CALLS, tools=SPOTIFY)
+    assert score_item(gold_item, spotify_reply(("Taylor Swift", 20), ("Maroon 5", 15)))["ast_strict"] == 1
+    assert score_item(gold_item, spotify_reply(("Maroon 5", 15), ("Taylor Swift", 20)))["ast_strict"] == 1
+
+
+def test_same_named_calls_with_crossed_values_stay_wrong():
+    assert score_item(item(TWO_CALLS, tools=SPOTIFY), spotify_reply(("Taylor Swift", 15), ("Maroon 5", 20)))["ast_strict"] == 0
+
+
+# ── BFCL items ────────────────────────────────────────────────────────────────
+def test_bfcl_items_unwraps_tools_and_takes_the_single_turn():
+    from types import SimpleNamespace
+    from data import bfcl_items
+    tool = {"name": "add", "description": "", "parameters": {}}
+    call = {"name": "add", "arguments": {"a": [1]}}
+    samples = [SimpleNamespace(id="simple_0", input_text="q", tools=[{"type": "function", "function": tool}],
+                               expected_tool_calls=[[call]]),
+               SimpleNamespace(id="irrelevance_0", input_text="r", tools=[{"type": "function", "function": tool}],
+                               expected_tool_calls=[])]
+    first, second = bfcl_items(samples)
+    assert (first["id"], first["lang"], first["query"], first["tools"], first["gold"]) == ("simple_0", "en-US", "q", [tool], [call])
+    assert first["policy"] == "verbatim"
+    assert second["gold"] == []
