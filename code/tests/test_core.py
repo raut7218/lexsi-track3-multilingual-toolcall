@@ -7,6 +7,7 @@ from config import N_GRPO, N_SFT
 from data import (align_english, arg_schema, build_item, candidates, convert, eval_items, fn_name,
                   functions_json, held_out_items, judged, load_massive, slots, split_train, stratified,
                   why_dropped)
+from generate import pending, read_preds
 from parse import parse
 from prompts import FORMAT, bfcl_zero_shot, custom_one_shot, grpo_prompt, training_messages
 from rewards import reward, reward_parts
@@ -506,3 +507,21 @@ def test_held_out_items_applies_the_same_filters_and_matches_the_english_tools()
 def test_load_massive_reads_only_the_requested_locales(tmp_path):
     (tmp_path / "sw-KE.jsonl").write_text('{"id": "1"}\n', encoding="utf-8")
     assert load_massive(tmp_path, ("sw-KE",)) == {"sw-KE": [{"id": "1"}]}
+
+
+# ── generate ──────────────────────────────────────────────────────────────────
+def test_pending_skips_finished_ids_and_survives_a_torn_last_line(tmp_path):
+    log = tmp_path / "preds.jsonl"
+    log.write_text('{"id": "1", "reply": "[]"}\n\n{"id": "2", "rep', encoding="utf-8")
+    items = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
+    assert [i["id"] for i in pending(items, log)] == ["2", "3"]
+
+
+def test_pending_returns_everything_when_there_is_no_log(tmp_path):
+    assert pending([{"id": "1"}], tmp_path / "none.jsonl") == [{"id": "1"}]
+
+
+def test_read_preds_returns_each_finished_row_by_id(tmp_path):
+    log = tmp_path / "preds.jsonl"
+    log.write_text('{"id": "1", "reply": "a"}\n{"id": "2", "rep\n{"id": "3", "reply": "c"}\n', encoding="utf-8")
+    assert {k: v["reply"] for k, v in read_preds(log).items()} == {"1": "a", "3": "c"}

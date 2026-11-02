@@ -9,6 +9,7 @@ AGENTTUNE_COMMIT = "d4db4c12d52342227c4113a70183d0f64aa2f345"
 AUDITKIT_COMMIT = "71316da345784ff220d5ed59337441a59ab31526"
 
 SEED = 42
+MAX_CONTEXT = 8192  # Tiny Aya's max_position_embeddings
 MAX_NEW_TOKENS = 128
 # Set as tokenizer.eos_token everywhere. The shipped eos (id 6) is not what Tiny Aya emits after a
 # response, so TRL never stops and its is_eos mask lets the trailing tokens into the GRPO loss.
