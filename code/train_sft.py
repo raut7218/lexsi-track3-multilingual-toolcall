@@ -1,5 +1,5 @@
 """SFT on the 10-language train split. Prompts render exactly as in eval, and only the reply earns loss."""
-from config import SEED, STOP_TOKEN
+from config import MAX_CONTEXT, SEED, STOP_TOKEN
 from generate import load_model
 from prompts import target, training_messages
 
@@ -25,6 +25,7 @@ def build(items, output_dir, token=None, batch_size=2, grad_accum=8, learning_ra
     model.enable_input_require_grads()
     config = SFTConfig(output_dir=output_dir, per_device_train_batch_size=batch_size,
                        gradient_accumulation_steps=grad_accum, learning_rate=learning_rate, fp16=True, bf16=False,
-                       gradient_checkpointing=True, report_to="none", seed=SEED, **args)
+                       gradient_checkpointing=True, report_to="none", seed=SEED,
+                       max_length=MAX_CONTEXT, **args)  # TRL's default of 1024 would cut every reply off
     return SFTTrainer(model=model, args=config, processing_class=tk,
                       train_dataset=Dataset.from_list([encode(item, tk) for item in items]))
