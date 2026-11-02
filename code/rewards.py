@@ -37,7 +37,6 @@ def make_reward(log_path):
                 parts = reward_parts(text, parsed)
                 scores.append(sum(WEIGHTS[k] * v for k, v in parts.items()))
                 log.write(json.dumps({"id": parsed["id"], "lang": parsed["lang"], "reply": text, "parts": parts,
-                                      "reward": scores[-1]}, ensure_ascii=False) + "
-")
+                                      "reward": scores[-1]}, ensure_ascii=False) + "\n")
         return scores
     return tool_call_reward
