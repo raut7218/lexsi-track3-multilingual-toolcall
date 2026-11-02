@@ -643,3 +643,32 @@ def test_target_scores_perfectly_and_earns_full_reward():
     gold_item = {**item(ALARM), "policy": "verbatim"}
     assert score_item(gold_item, target(gold_item))["ast_verbatim"] == 1
     assert reward(target(gold_item), gold_item) == pytest.approx(1.0)
+
+
+# ── GRPO reward ───────────────────────────────────────────────────────────────
+def test_make_reward_scores_each_reply_and_logs_its_parts(tmp_path):
+    from rewards import make_reward
+    log = tmp_path / "rewards.jsonl"
+    gold_item = {**item(ALARM), "policy": "verbatim"}
+    good = [{"role": "assistant", "content": target(gold_item)}]
+    bad = [{"role": "assistant", "content": "I can't help"}]
+    scores = make_reward(log)([good, bad], item=[json.dumps(gold_item, ensure_ascii=False)] * 2, trainer_state=None)
+    assert scores == pytest.approx([1.0, 0.0])
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [r["reward"] for r in rows] == pytest.approx([1.0, 0.0])
+    assert rows[0]["reply"] == target(gold_item) and rows[0]["id"] == "1"
+    assert rows[0]["parts"] == {"format": 1, "function": 1, "keys": 1.0, "values": 1.0}
+
+
+def test_make_reward_reads_plain_string_completions(tmp_path):
+    from rewards import make_reward
+    gold_item = {**item(ALARM), "policy": "verbatim"}
+    assert make_reward(tmp_path / "r.jsonl")([target(gold_item)], item=[json.dumps(gold_item)]) == pytest.approx([1.0])
+
+
+def test_grpo_rows_carry_the_eval_prompt_and_the_whole_item():
+    from train_grpo import grpo_row
+    gold_item = {**item(ALARM), "policy": "verbatim"}
+    row = grpo_row(gold_item)
+    assert row["prompt"] == training_messages(gold_item)
+    assert json.loads(row["item"]) == gold_item
