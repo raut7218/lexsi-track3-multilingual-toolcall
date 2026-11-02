@@ -92,3 +92,28 @@ At 1,000 per language, SFT keeps all 55 functions in every language, with 15.5% 
 2. **GRPO steps:** 500, about 4.4 hours, once Step 5 has checked ties and the learning rate on the real SFT adapter. Recommended. If most steps tie, the count should be revisited before spending the time.
 3. **Catalogue sample:** 100 items per language, which the plan already names as the first cut. Recommended.
 4. **Compute budget:** about 35 hours of T4 time from Nov 3 to Nov 12. The SFT and GRPO runs are each over 2 hours. The user's remaining Colab compute isn't visible from here.
+
+## HF Jobs `t4-small` pilot
+
+Job `6ae877ae0e0338d1bb7e00cf`, run 2026-11-02 at commit `39631e9`, cost $0.09 for 14 minutes. Source numbers are in private dataset `GauravRaut/lexsi-track3-workspace`, under `03_preds/hf_pilot/`. The same limits apply: no accuracy number here is a result.
+
+| Check | Colab T4 | HF `t4-small` |
+|---|---|---|
+| Tests | 95 of 95 | 95 of 95 |
+| Eval replies, batch 4, 60 items | Baseline | **60 of 60 identical** |
+| Eval speed | 0.82 items/s | 1.02 items/s |
+| SFT, 8 steps at batch 2 | 0.36 examples/s | 0.47 examples/s |
+| GRPO, 4 steps | 31.8 s per step | 15.9 s per step |
+| Peak GPU memory, eval / SFT / GRPO | 7.9 / 11.4 / 10.3 GB | 7.9 / 11.4 / 10.0 GB |
+| Peak system RAM | Killed once at 12 GB | 13.0 GB of 16 GB |
+
+GRPO's speed comes from 4 steps, against 8 on Colab, on a different adapter and item slice, so its budget is given at both speeds. Python was 3.13.18 here and 3.13.16 on Colab. The 60 replies are the base model only.
+
+| Work | Hours at HF speed |
+|---|---|
+| SFT, 10,000 examples | 5.9 |
+| GRPO, 50-step test and 500 steps | 2.4 to 4.9 |
+| Dev selection, 5 checkpoints | 2.7 |
+| Final evals, scaled by the eval speedup | 15.8 |
+| **Total** | **27 to 29 hours, $11 to $12** |
+
