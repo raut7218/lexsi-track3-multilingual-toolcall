@@ -14,4 +14,10 @@ MAX_NEW_TOKENS = 128
 # response, so TRL never stops and its is_eos mask lets the trailing tokens into the GRPO loss.
 STOP_TOKEN = "<|END_RESPONSE|>"
 
+ARG_CUT = 0.02  # gives 211 arguments, the closest of the cutoffs tried to the paper's 200
+N_TEST, N_TEST_NO_CALL = 588, 88
+N_DEV, N_DEV_NO_CALL = 200, 30
+N_SFT, N_GRPO = 3000, 1000
+NO_CALL_RATE, ENGLISH_RATE = 0.15, 0.25
+
 LOCALES = ("en-US", "fr-FR", "es-ES", "zh-CN", "ja-JP", "ar-SA", "hi-IN", "id-ID", "vi-VN", "tr-TR")

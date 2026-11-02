@@ -3,7 +3,8 @@ import random
 
 import pytest
 
-from data import align_english, build_item, candidates, convert, fn_name, slots
+from data import (align_english, arg_schema, build_item, candidates, convert, fn_name, functions_json,
+                  judged, slots, stratified, why_dropped)
 from parse import parse
 from prompts import FORMAT, bfcl_zero_shot, custom_one_shot, grpo_prompt, training_messages
 from rewards import reward, reward_parts
@@ -381,3 +382,85 @@ def test_build_item_wraps_gold_values_as_accepted_lists():
     it = build_item({"id": "9", "lang": "en-US", "query": "q", "name": "a.1", "args": {"x": "y"}},
                     fns, NAMES, k=2, no_call=False, policy="verbatim", seed=1)
     assert it["gold"] == [{"name": "a.1", "arguments": {"x": ["y"]}}]
+
+
+# ── data filters ──────────────────────────────────────────────────────────────
+def vote(intent=1, slots_score=1, grammar=4, spelling=2, lang="target"):
+    return {"intent_score": intent, "slots_score": slots_score, "grammar_score": grammar,
+            "spelling_score": spelling, "language_identification": lang}
+
+
+def judged_row(votes, locale="fr-FR"):
+    return {"locale": locale, "judgments": votes}
+
+
+def test_judged_passes_no_slot_rows_and_reasonable_intents():
+    assert judged(judged_row([vote(slots_score=2)] * 3))
+    assert judged(judged_row([vote(intent=2)] * 3))
+
+
+def test_judged_needs_a_majority():
+    assert not judged(judged_row([vote(intent=0), vote(intent=0), vote()]))
+    assert judged(judged_row([vote(slots_score=0), vote(), vote()]))
+
+
+def test_judged_uses_median_scores():
+    assert not judged(judged_row([vote(grammar=2), vote(grammar=2), vote(grammar=4)]))
+    assert not judged(judged_row([vote(spelling=0), vote(spelling=0), vote()]))
+
+
+def test_judged_keeps_mixed_language_but_needs_the_target():
+    assert judged(judged_row([vote(lang="target & english")] * 3))
+    assert not judged(judged_row([vote(lang="english")] * 3))
+
+
+def test_judged_without_votes():
+    assert judged({"locale": "en-US"})
+    assert not judged(judged_row([]))
+
+
+def mrow(intent, annot, partition="train"):
+    return {"id": "1", "locale": "en-US", "partition": partition, "scenario": "s",
+            "intent": intent, "utt": annot, "annot_utt": annot}
+
+
+def test_arg_schema_cut_ignores_dev_and_test_rows():
+    rows = [mrow("alarm_set", "[time : five]")] * 99 + [mrow("alarm_set", "[date : monday]")]
+    rows += [mrow("alarm_set", "[relation : mom]", "test")] * 500
+    assert arg_schema(rows, cut=0.02) == {"alarm_set": ["time"]}
+
+
+def test_arg_schema_whole_query_intents_take_only_query():
+    assert arg_schema([mrow("qa_factoid", "how large is [place_name : alaska]")]) == {"qa_factoid": ["query"]}
+
+
+def test_why_dropped_names_each_filter():
+    schema = {"alarm_set": ["time"]}
+    assert why_dropped(mrow("general_greet", "hi"), schema) == "open_ended_intent"
+    assert why_dropped(mrow("alarm_set", "[time : a] [time : b]"), schema) == "duplicate_argument"
+    assert why_dropped(mrow("alarm_set", "[relation : mom]"), schema) == "rare_argument"
+    assert why_dropped(mrow("alarm_set", "[time : five]"), schema) is None
+    assert why_dropped({**mrow("alarm_set", "[time : five]"), "locale": "fr-FR", "judgments": []}, schema) == "judgment"
+
+
+def test_functions_json_only_requires_query():
+    from schemas import FN_DESC
+    assert len(FN_DESC) == 55
+    specs = functions_json({"alarm_set": ["time"], "qa_factoid": ["query"]})
+    assert specs[0]["parameters"]["required"] == [] and specs[1]["parameters"]["required"] == ["query"]
+
+
+def conv(row_id, name, args):
+    return {"id": str(row_id), "lang": "en-US", "query": "q", "name": name, "args": args}
+
+
+def test_stratified_is_even_across_functions_and_reproducible():
+    convs = [conv(i, "a.big", {"x": "1"}) for i in range(100)] + [conv(100 + i, "b.small", {}) for i in range(3)]
+    picked = stratified(convs, 6, seed=1)
+    assert sum(c["name"] == "b.small" for c in picked) == 3
+    assert [c["id"] for c in picked] == [c["id"] for c in stratified(convs, 6, seed=1)]
+    assert len({c["id"] for c in picked}) == 6
+
+
+def test_stratified_stops_when_rows_run_out():
+    assert len(stratified([conv(1, "a.x", {})], 5, seed=1)) == 1
