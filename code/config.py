@@ -21,3 +21,5 @@ N_SFT, N_GRPO = 3000, 1000
 NO_CALL_RATE, ENGLISH_RATE = 0.15, 0.25
 
 LOCALES = ("en-US", "fr-FR", "es-ES", "zh-CN", "ja-JP", "ar-SA", "hi-IN", "id-ID", "vi-VN", "tr-TR")
+# Outside our training, but on Tiny Aya's language list: new to AgentTune, not to the base model.
+HELD_OUT = ("sw-KE", "am-ET", "te-IN", "km-KH")

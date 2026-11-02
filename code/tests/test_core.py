@@ -3,8 +3,10 @@ import random
 
 import pytest
 
-from data import (align_english, arg_schema, build_item, candidates, convert, fn_name, functions_json,
-                  judged, slots, stratified, why_dropped)
+from config import N_GRPO, N_SFT
+from data import (align_english, arg_schema, build_item, candidates, convert, eval_items, fn_name,
+                  functions_json, held_out_items, judged, load_massive, slots, split_train, stratified,
+                  why_dropped)
 from parse import parse
 from prompts import FORMAT, bfcl_zero_shot, custom_one_shot, grpo_prompt, training_messages
 from rewards import reward, reward_parts
@@ -464,3 +466,43 @@ def test_stratified_is_even_across_functions_and_reproducible():
 
 def test_stratified_stops_when_rows_run_out():
     assert len(stratified([conv(1, "a.x", {})], 5, seed=1)) == 1
+
+
+GOOD_VOTES = [{"intent_score": 1, "slots_score": 1, "grammar_score": 4, "spelling_score": 2,
+               "language_identification": "target"}] * 3
+SCENARIOS = {"weather.query": "weather", "weather.a": "weather", "weather.b": "weather", "weather.c": "weather",
+             "other.a": "other", "other.b": "other", "other.c": "other", "other.d": "other"}
+FUNCTIONS = {name: {"name": name, "description": "", "parameters": {}} for name in SCENARIOS}
+
+
+def test_split_train_gives_grpo_the_rare_functions_that_sampling_uses_up_first():
+    items = [conv(i, "a.rare", {}) for i in range(N_SFT)] + [conv(N_SFT + i, "b.common", {}) for i in range(N_GRPO)]
+    sft, grpo = split_train(items, seed=1)
+    assert (len(sft), len(grpo)) == (N_SFT, N_GRPO)
+    assert "a.rare" in {c["name"] for c in grpo}
+    assert not {c["id"] for c in sft} & {c["id"] for c in grpo}
+    assert sft == split_train(items, seed=1)[0]
+
+
+def test_eval_items_skips_a_missing_row_and_keeps_no_call_tied_to_the_id():
+    convs = {i: conv(i, "weather.query", {}) for i in ("1", "3", "4")}
+    items = eval_items(["1", "2", "3", "4"], 2, convs, FUNCTIONS, SCENARIOS, seed=1)
+    assert [i["id"] for i in items] == ["1", "3", "4"]
+    assert [bool(i["gold"]) for i in items] == [True, False, False]
+
+
+def test_held_out_items_applies_the_same_filters_and_matches_the_english_tools():
+    schema = {"weather_query": ["place_name"]}
+    rows = [row(id="1", annot_utt="[place_name : x]", judgments=GOOD_VOTES),
+            row(id="2", annot_utt="[color_type : x]", judgments=GOOD_VOTES),
+            row(id="3", annot_utt="[place_name : y]", judgments=[])]
+    test_ids = ["1", "2", "3"] + [str(i) for i in range(4, 100)]
+    items = held_out_items(rows, schema, test_ids, FUNCTIONS, SCENARIOS, seed=1)
+    assert [(i["id"], i["lang"]) for i in items] == [("1", "hi-IN")]
+    english = build_item(conv("1", "weather.query", {}), FUNCTIONS, SCENARIOS, 5, False, "verbatim", 1)
+    assert items[0]["tools"] == english["tools"]
+
+
+def test_load_massive_reads_only_the_requested_locales(tmp_path):
+    (tmp_path / "sw-KE.jsonl").write_text('{"id": "1"}\n', encoding="utf-8")
+    assert load_massive(tmp_path, ("sw-KE",)) == {"sw-KE": [{"id": "1"}]}

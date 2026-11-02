@@ -9,7 +9,7 @@ import re
 import statistics
 from pathlib import Path
 
-from config import (ARG_CUT, ENGLISH_RATE, LOCALES, N_DEV, N_DEV_NO_CALL, N_GRPO, N_SFT, N_TEST,
+from config import (ARG_CUT, ENGLISH_RATE, HELD_OUT, LOCALES, N_DEV, N_DEV_NO_CALL, N_GRPO, N_SFT, N_TEST,
                     N_TEST_NO_CALL, NO_CALL_RATE, SEED)
 from schemas import ARG_DESC, FN_DESC
 
@@ -145,9 +145,9 @@ def build_item(conv, functions, scenarios, k, no_call, policy, seed):
             "tools": [functions[n] for n in names], "gold": gold, "policy": policy}
 
 
-def load_massive(raw_dir):
+def load_massive(raw_dir, locales=LOCALES):
     return {locale: [json.loads(line) for line in (Path(raw_dir) / f"{locale}.jsonl").open(encoding="utf-8")]
-            for locale in LOCALES}
+            for locale in locales}
 
 
 def train_item(conv, en_conv, functions, scenarios, seed):
@@ -161,10 +161,25 @@ def train_item(conv, en_conv, functions, scenarios, seed):
 
 
 def eval_items(id_list, n_no_call, convs, functions, scenarios, seed):
-    """The last n_no_call ids become no-call items, so every language gets the same split."""
+    """The last n_no_call ids become no-call items, so every language gets the same split.
+
+    Ids missing from convs are skipped, which only happens in a held-out language.
+    """
     cut = len(id_list) - n_no_call
     return [build_item(convs[row_id], functions, scenarios, 5, i >= cut, "verbatim", seed)
-            for i, row_id in enumerate(id_list)]
+            for i, row_id in enumerate(id_list) if row_id in convs]
+
+
+def split_train(items, seed):
+    """Shuffled first: sampling uses up rare functions early, so the head alone would hold them all."""
+    items = random.Random(seed).sample(items, len(items))
+    return items[:N_SFT], items[N_SFT:]
+
+
+def held_out_items(rows, schema, test_ids, functions, scenarios, seed):
+    """The test ids that survive the same filters in a language outside our training set."""
+    convs = {row["id"]: convert(row) for row in rows if why_dropped(row, schema) is None}
+    return eval_items(test_ids, N_TEST_NO_CALL, convs, functions, scenarios, seed)
 
 
 def write_items(path, items):
@@ -210,8 +225,9 @@ def build_all(raw_dir, out_dir, seed=SEED):
         if len(train) < N_SFT + N_GRPO:
             raise ValueError(f"{locale}: only {len(train)} train rows")
         items = [train_item(c, english.get(c["id"]), functions, scenarios, seed) for c in train]
-        write_items(out / f"sft_{locale}.jsonl.gz", items[:N_SFT])
-        write_items(out / f"grpo_{locale}.jsonl.gz", items[N_SFT:])
+        sft, grpo = split_train(items, seed)
+        write_items(out / f"sft_{locale}.jsonl.gz", sft)
+        write_items(out / f"grpo_{locale}.jsonl.gz", grpo)
         write_items(out / f"dev_{locale}.jsonl.gz",
                     eval_items(dev_ids, N_DEV_NO_CALL, convs, functions, scenarios, seed))
         write_items(out / f"test_{locale}.jsonl.gz",
@@ -221,6 +237,13 @@ def build_all(raw_dir, out_dir, seed=SEED):
                         for c in train),
             train_used=len(train), english_policy=sum(i["policy"] == "english" for i in items),
             no_call=sum(not i["gold"] for i in items))
+    held = load_massive(raw_dir, HELD_OUT)
+    for locale in HELD_OUT:
+        items = held_out_items(held[locale], schema, test_ids, functions, scenarios, seed)
+        write_items(out / f"heldout_{locale}.jsonl.gz", items)
+        reasons = collections.Counter(why_dropped(row, schema) for row in held[locale])
+        counts[locale] = {"rows": len(held[locale]), "removed": {k: n for k, n in reasons.items() if k},
+                          "test_items": len(items), "no_call": sum(not i["gold"] for i in items)}
     (out / "eval_ids.json").write_text(json.dumps({"test": test_ids, "dev": dev_ids}), encoding="utf-8")
     return {"counts": counts, "shared": {part: len(shared(part)) for part in ("train", "dev", "test")},
             "n_functions": len(specs), "n_args": sum(len(v) for v in schema.values()),
