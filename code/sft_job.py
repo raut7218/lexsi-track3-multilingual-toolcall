@@ -34,10 +34,10 @@ def upload(api, folder, path_in_repo):
             time.sleep(60)
 
 
-def latest(files):
-    """Newest checkpoint folder under PREFIX, or None."""
-    steps = {int(m.group(1)) for f in files if (m := re.match(rf"{PREFIX}/checkpoint-(\d+)/", f))}
-    return f"{PREFIX}/checkpoint-{max(steps)}" if steps else None
+def latest(files, prefix=PREFIX):
+    """Newest checkpoint folder under prefix, or None."""
+    steps = {int(m.group(1)) for f in files if (m := re.match(rf"{prefix}/checkpoint-(\d+)/", f))}
+    return f"{prefix}/checkpoint-{max(steps)}" if steps else None
 
 
 def main():

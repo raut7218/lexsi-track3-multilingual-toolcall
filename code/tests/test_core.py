@@ -723,5 +723,5 @@ def test_sft_resumes_from_the_highest_step_of_its_own_run(monkeypatch):
     from sft_job import latest
     files = ["04_models/sft/checkpoint-125/adapter_model.safetensors", "04_models/sft/checkpoint-1000/optimizer.pt",
              "04_models/sft_smoke/checkpoint-2000/optimizer.pt", "04_models/sft/summary.json"]
-    assert latest(files) == "04_models/sft/checkpoint-1000"
-    assert latest(files[2:]) is None
+    assert latest(files, "04_models/sft") == "04_models/sft/checkpoint-1000"
+    assert latest(files[2:], "04_models/sft") is None
