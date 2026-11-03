@@ -17,6 +17,7 @@ AST is scored on call rows only, as in the paper. Group averages are the mean of
 | Held-out, training prompt | 4 | 1,835 | 7.9 | 5.8–8.9 | 70.5 | 99.5 | 94.4 | 15.5 | 3.4 |
 | Held-out, zero-shot | 4 | 1,835 | 6.5 | 5.2–7.5 | 40.5 | 61.3 | 57.9 | 43.9 | 0.9 |
 | BFCL, training prompt | 5 | 1,000 | 47.1 | 11.5–81.0 | 56.8 | 98.9 | 75.8 | 35.0 | 18.1 |
+| BFCL, training prompt, 512 tokens | 5 | 1,000 | **60.3** | 38.5–81.0 | 74.8 | 99.5 | 91.6 | 34.2 | 0.2 |
 | BFCL, zero-shot | 5 | 1,000 | 35.2 | 18.0–47.5 | 45.8 | 54.6 | 56.2 | 36.2 | 1.6 |
 | Catalogue, training prompt | 10 | 1,000 | 3.3 | 2.0–6.0 | 51.7 | 99.6 | 95.4 | n/a | 3.0 |
 | Catalogue, zero-shot | 10 | 1,000 | 0.2 | 0.0–1.0 | 16.9 | 37.9 | 37.9 | n/a | 0.4 |
@@ -33,21 +34,25 @@ AST is scored on call rows only, as in the paper. Group averages are the mean of
 
 ## Two measurement problems
 
-### The 128-token cap understates BFCL parallel scores
+### The 128-token cap understated BFCL parallel scores, fixed by a rerun at 512
 
-| BFCL, training prompt | AST strict | 95% CI | Hit cap |
-|---|---|---|---|
-| `simple` | 77.8 | 73.4–81.6 | 0.8 |
-| `multiple` | 81.0 | 75.0–85.8 | 0.0 |
-| `parallel` | 18.0 | 13.3–23.9 | 32.5 |
-| `parallel_multiple` | 11.5 | 7.8–16.7 | 55.5 |
-| `irrelevance` (no-call score) | 35.0 | n/a | 1.7 |
+Under the training prompt, the base model writes pretty-printed JSON, so a list of calls ran past the 128-token cap. The parser then rescued only the first call in 169 of the 176 capped replies, so they failed on call count. All five BFCL categories were rerun under the training prompt at 512 new tokens, as pass `bfcl_training_512`, in HF job `6ae9728fc78863f9c6316290` at commit `dd9b21a`. The 128 files are kept. **BFCL in every later stage runs at 512, so base and trained models are compared at the same cap.**
 
-Under the training prompt, the base model writes pretty-printed JSON, so a list of calls runs past the 128-token cap. Sampled replies were plausible lists of calls, cut off part-way, not loops. The parser then rescued only the first call in 169 of the 176 capped replies, so they fail on call count. `Format` stays near 99% only because of that rescue, and strict format is 75.8%.
+| BFCL, training prompt | AST strict at 128 | AST strict at 512 | 95% CI at 512 | Hit cap at 128 | Hit cap at 512 | Strict format at 128 | Strict format at 512 |
+|---|---|---|---|---|---|---|---|
+| `simple` | 77.8 | 77.8 | 73.4–81.6 | 0.8 | 0.0 | 96.2 | 97.0 |
+| `multiple` | 81.0 | 81.0 | 75.0–85.8 | 0.0 | 0.0 | 99.0 | 99.0 |
+| `parallel` | 18.0 | **38.5** | 32.0–45.4 | 32.5 | 0.0 | 55.5 | 85.0 |
+| `parallel_multiple` | 11.5 | **44.0** | 37.3–50.9 | 55.5 | 0.0 | 34.5 | 83.0 |
+| `irrelevance` (no-call score) | 35.0 | 34.2 | n/a | 1.7 | 0.8 | 93.8 | 94.2 |
 
-Both scores are therefore lower bounds. It also threatens later comparisons: SFT teaches compact one-line JSON, so its replies will fit the cap more often, and BFCL parallel could rise with no real gain in skill. The size of the effect isn't known without a rerun at a higher cap. BFCL zero-shot is much less affected, with 2.5% and 3.0% of replies capped.
+**The rerun is clean.** Every one of the 1,057 replies that had stopped under 128 tokens is byte-identical at 512. That holds because decoding is greedy and the batch order is the same, so the cap can only change where a reply ends. Only the other 183 replies, the ones capped at 128, could change. 176 of them are in the two parallel files. The longest finished reply was 424 tokens, so 512 is enough.
 
-Shortlist rows hit the cap 2.8% of the time, and almost all their gold is a single call, so this matters far less there.
+**Most of the low parallel score was the cap.** `parallel` roughly doubles and `parallel_multiple` almost quadruples. In `parallel_multiple`, `wrong_count` falls from 172 rows to 80. Without this rerun, an SFT model writing compact JSON would have gained up to 20.5 and 32.5 points on these two categories from reply length alone.
+
+**`irrelevance` moves the other way, for the same reason.** Four replies hit the cap at 128. Two of them were cut-off calls that failed to parse, which BFCL's rule credits as correct declines. At 512 they finish as calls and count as over-calls, so the no-call score drops by 2 of 240 rows. The other two still hit 512, and both are repetition loops: one counts Monopoly players and the other repeats a list of survey answers.
+
+Shortlist rows hit the 128 cap 2.8% of the time, and almost all their gold is a single call, so MASSIVE stays at 128.
 
 ### The zero-shot no-call score is mostly failed calls
 
@@ -153,5 +158,5 @@ SFT and GRPO times still rest on the short pilot, and pilot speed proved optimis
 
 ## Open decisions
 
-1. **BFCL cap:** rerun base BFCL `parallel` and `parallel_multiple` under the training prompt at 512 new tokens, and use the same cap for BFCL in later stages. This keeps the 128-token results, takes under 45 minutes and costs about $0.30 at most. Recommended, because otherwise any BFCL parallel gain can't be trusted.
-2. **Step 4 SFT:** about 5.9 hours on `t4-small`, so it needs a go-ahead under the two-hour rule.
+1. **BFCL cap:** closed 2026-11-03. The user chose to rerun all five categories at 512. Results are above.
+2. **Step 4 SFT:** approved 2026-11-03, running.
