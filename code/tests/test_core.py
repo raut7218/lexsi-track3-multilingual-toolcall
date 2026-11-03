@@ -716,3 +716,12 @@ def test_summarize_leaves_no_call_rows_out_of_call_metrics(monkeypatch):
     assert out["ast_strict"] == 0.5 and out["fsa"] == 1.0 and out["no_call_correct"] == 1.0
     assert out["errors"] == {"correct": 2, "invalid_value": 1}
     assert out["hit_token_cap"] == pytest.approx(1 / 3)
+
+
+def test_sft_resumes_from_the_highest_step_of_its_own_run(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "x")
+    from sft_job import latest
+    files = ["04_models/sft/checkpoint-125/adapter_model.safetensors", "04_models/sft/checkpoint-1000/optimizer.pt",
+             "04_models/sft_smoke/checkpoint-2000/optimizer.pt", "04_models/sft/summary.json"]
+    assert latest(files) == "04_models/sft/checkpoint-1000"
+    assert latest(files[2:]) is None
