@@ -1,7 +1,10 @@
 """The eval matrix for one stage. Finished files live in the workspace dataset, so a rerun skips them.
 
     python run_eval.py base
-    python run_eval.py sft <adapter>
+    python run_eval.py sft 04_models/sft/checkpoint-500
+    python run_eval.py sft_dev/step500 04_models/sft/checkpoint-500
+
+The adapter is a folder in the workspace dataset. A stage named with "dev" runs only the dev split.
 """
 import json
 import os
@@ -38,6 +41,8 @@ def bfcl():
 
 def matrix(stage):
     """(pass, group, items, render) for every file the stage writes: the plan's matrix, cheapest passes early."""
+    if "dev" in stage:
+        return [("dev_training", L, load(f"dev_{L}"), prompts.training_messages) for L in config.LOCALES]
     training = {"training": prompts.training_messages}
     shortlist = {**training, "zero_shot": prompts.bfcl_zero_shot, "one_shot": prompts.custom_one_shot}
     ood = {**training, "zero_shot": prompts.bfcl_zero_shot}
@@ -56,8 +61,10 @@ def matrix(stage):
     rows += [("english_training", L, data.english_items(test[L], test["en-US"], english), prompts.training_messages)
              for L in config.LOCALES]
     for name, render in ood.items():
-        rows += [(f"bfcl_{name}", c, bfcl_sets[c], render) for c in BFCL_CATEGORIES]
+        if stage == "base":  # kept at the old cap; later stages only have bfcl_training_512
+            rows += [(f"bfcl_{name}", c, bfcl_sets[c], render) for c in BFCL_CATEGORIES]
         rows += [(f"heldout_{name}", L, load(f"heldout_{L}"), render) for L in config.HELD_OUT]
+    rows += [("bfcl_training_512", c, bfcl_sets[c], prompts.training_messages) for c in BFCL_CATEGORIES]
     for name, render in shortlist.items():
         rows += [(f"catalogue_{name}", L, data.catalogue_items(test[L], functions, catalogue), render)
                  for L in config.LOCALES]
@@ -81,18 +88,20 @@ def commit(api, message, paths):
 def main(stage, adapter=None):
     from huggingface_hub import HfApi, snapshot_download
     api = HfApi(token=TOKEN)
-    snapshot_download(REPO, repo_type="dataset", local_dir=DATA, token=TOKEN, allow_patterns=["01_data/items/*"])
+    snapshot_download(REPO, repo_type="dataset", local_dir=DATA, token=TOKEN,
+                      allow_patterns=["01_data/items/*"] + ([f"{adapter}/adapter_*"] if adapter else []))
     rows = matrix(stage)
     done = set(api.list_repo_files(REPO, repo_type="dataset"))
     todo = [row for row in rows if f"03_preds/{stage}/{row[0]}/{row[1]}.jsonl" not in done]
     print(f"{len(rows)} files, {sum(len(r[2]) for r in rows)} items | to run: {len(todo)} files, "
           f"{sum(len(r[2]) for r in todo)} items", flush=True)
 
-    model, tk = generate.load_model(adapter, TOKEN)
+    model, tk = generate.load_model(adapter and str(DATA / adapter), TOKEN)
     for name, group, items, render in todo:
         rel = f"03_preds/{stage}/{name}/{group}"
         path = OUT / f"{rel}.jsonl"
-        timing = generate.run(model, tk, items, render, path)
+        cap = config.BFCL_MAX_NEW_TOKENS if name.endswith("_512") else config.MAX_NEW_TOKENS
+        timing = generate.run(model, tk, items, render, path, max_new_tokens=cap)
         preds = generate.read_preds(path)
         if set(preds) != {item["id"] for item in items}:
             raise ValueError(f"{rel}: {len(preds)} replies for {len(items)} items")

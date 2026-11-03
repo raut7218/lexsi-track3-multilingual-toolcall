@@ -11,6 +11,7 @@ AUDITKIT_COMMIT = "71316da345784ff220d5ed59337441a59ab31526"
 SEED = 42
 MAX_CONTEXT = 8192  # Tiny Aya's max_position_embeddings
 MAX_NEW_TOKENS = 128
+BFCL_MAX_NEW_TOKENS = 512  # pretty-printed parallel calls ran past 128 on base: 32.5% and 55.5% cut off
 # Set as tokenizer.eos_token everywhere. The shipped eos (id 6) is not what Tiny Aya emits after a
 # response, so TRL never stops and its is_eos mask lets the trailing tokens into the GRPO loss.
 STOP_TOKEN = "<|END_RESPONSE|>"

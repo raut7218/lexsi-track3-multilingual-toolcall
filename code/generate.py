@@ -38,7 +38,7 @@ def load_model(adapter=None, token=None, trainable=False):
     return (model.train() if trainable else model.eval()), tk
 
 
-def run(model, tk, items, render, path, batch_size=4):
+def run(model, tk, items, render, path, batch_size=4, max_new_tokens=MAX_NEW_TOKENS):
     """render(item) gives the messages. Returns timing; rows go to path as they finish."""
     todo = pending(items, path)
     texts = [tk.apply_chat_template(render(i), tokenize=False, add_generation_prompt=True) for i in todo]
@@ -51,10 +51,10 @@ def run(model, tk, items, render, path, batch_size=4):
             picks = order[start:start + batch_size]
             enc = tk([texts[n] for n in picks], return_tensors="pt", padding=True, add_special_tokens=False).to(model.device)
             width = enc["input_ids"].shape[1]
-            if width + MAX_NEW_TOKENS > MAX_CONTEXT:
-                raise ValueError(f"prompt of {width} tokens leaves no room for {MAX_NEW_TOKENS} new ones")
+            if width + max_new_tokens > MAX_CONTEXT:
+                raise ValueError(f"prompt of {width} tokens leaves no room for {max_new_tokens} new ones")
             with torch.inference_mode():
-                out = model.generate(**enc, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
+                out = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
                                      pad_token_id=tk.pad_token_id, eos_token_id=tk.eos_token_id)
             for n, row in zip(picks, out[:, width:].tolist()):
                 stopped = tk.eos_token_id in row
